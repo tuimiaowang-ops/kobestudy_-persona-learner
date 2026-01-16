@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { GameMode, ChatMode, Character, UserState, N3GrammarTopic, CharacterId, Message, CustomAssets, DialoguePage, WordReading, QuizData, CollectedWord, Language } from './types';
-import { CHARACTERS, BACKGROUND_IMAGE, UI_TEXT } from './constants';
+import { CHARACTERS, BACKGROUND_IMAGE, BACKGROUND_MAP, UI_TEXT } from './constants';
 import { startChat, sendMessage, translateText } from './services/geminiService';
 import CharacterSprite from './components/CharacterSprite';
 import DialogueBox from './components/DialogueBox';
@@ -67,6 +67,15 @@ const App: React.FC = () => {
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, text: string } | null>(null);
   const [translationResult, setTranslationResult] = useState<{ original: string, translation: string } | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
+  
+  // 👔 新增：当前服装状态 (默认为空字符串，代表基础校服)
+  // 可选值对应你图片的前缀: 'casual', 'gym', 'swim', 'maid', 'prince' 等
+  const [currentOutfit, setCurrentOutfit] = useState<string>('');
+
+  // 🔥 计算背景图 URL
+  // 逻辑：如果有对应服装的背景就用，没有就用 default
+  const bgUrl = BACKGROUND_MAP[currentOutfit] || BACKGROUND_MAP['default'];
+  console.log('🎬 Background Update:', { currentOutfit, bgUrl });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const historyEndRef = useRef<HTMLDivElement>(null);
@@ -227,7 +236,8 @@ const App: React.FC = () => {
     setQuizFeedback(null);
     setCurrentQuiz(null);
     setIsDialogueFinished(false);
-    setCurrentEmotion('neutral'); 
+    setCurrentEmotion('neutral');
+    setCurrentOutfit(''); // 🔥 进入对话时重置为校服
 
     try {
       const result = await startChat(
@@ -249,6 +259,12 @@ const App: React.FC = () => {
       
       setMessages([greetingMsg]);
       setCurrentEmotion(result.emotion || 'neutral');
+      
+      // 🔥 如果初始问候中有 outfit 指令，执行换装
+      if (result.outfit !== undefined) {
+        setCurrentOutfit(result.outfit);
+      }
+      
       setChatHistories(prev => ({
         ...prev,
         [charId]: [...prev[charId], greetingMsg]
@@ -303,7 +319,19 @@ const App: React.FC = () => {
       };
 
       setMessages(prev => [...prev, modelMsg]);
-      setCurrentEmotion(response.emotion || 'neutral'); 
+      setCurrentEmotion(response.emotion || 'neutral');
+      
+      // 🔥【关键修改】如果 AI 说了要换衣服，我们就换！
+      console.log('🤖 Full Response:', response);
+      if (response.outfit !== undefined) {
+        // 如果 AI 返回空字符串 ""，意思是换回校服
+        // 如果 AI 返回 "swim"，意思是换泳装
+        console.log("✨ AI Requesting Outfit Change:", response.outfit);
+        setCurrentOutfit(response.outfit);
+      } else {
+        console.log("⚠️ AI did not return outfit field");
+      }
+      
       setChatHistories(prev => ({
         ...prev,
         [selectedCharId]: [...prev[selectedCharId], modelMsg]
@@ -411,25 +439,48 @@ const App: React.FC = () => {
     });
   };
 
+  // 👔 升级后的头像计算函数
   const getDynamicAvatar = (char: Character): Character => {
-    if (customAssets.characters[char.id]) {
-        return { ...char, avatarUrl: customAssets.characters[char.id]! };
+    // 1. 获取 AI 当前生成的表情 (如果没有就默认 neutral)
+    const baseEmotion = currentEmotion || 'neutral';
+    
+    // 2. 尝试构建"服装_表情"的组合键 (例如: swim_shy)
+    // 如果 currentOutfit 是空的，这就只是 "shy"
+    const outfitKey = currentOutfit ? `${currentOutfit}_${baseEmotion}` : baseEmotion;
+
+    // 3. 检查这个组合键是否存在于角色的 emotionMap 里
+    // (例如：Asuka 有没有 swim_shy 这个图？)
+    if (char.emotionMap && char.emotionMap[outfitKey]) {
+      return { ...char, avatarUrl: char.emotionMap[outfitKey] };
     }
-    if (currentEmotion && char.emotionMap && char.emotionMap[currentEmotion]) {
-        return { ...char, avatarUrl: char.emotionMap[currentEmotion] };
+
+    // 4. 【保底逻辑】如果组合键不存在 (比如 AI 输出了 happy，但你没画 swim_happy)
+    // 我们尝试退回到该服装的默认表情 (swim_neutral)，保证衣服不突然变回去
+    const fallbackOutfitKey = currentOutfit ? `${currentOutfit}_neutral` : 'neutral';
+    if (currentOutfit && char.emotionMap && char.emotionMap[fallbackOutfitKey]) {
+        return { ...char, avatarUrl: char.emotionMap[fallbackOutfitKey] };
     }
-    return { ...char, avatarUrl: char.emotionMap['neutral'] || char.avatarUrl };
+
+    // 5. 【最终保底】如果连 swim_neutral 都没有，那就只好穿回校服了
+    if (char.emotionMap && char.emotionMap[baseEmotion]) {
+       return { ...char, avatarUrl: char.emotionMap[baseEmotion] };
+    }
+
+    return char;
   };
 
   const renderBackground = () => (
      <div className="absolute inset-0 w-full h-full -z-10 bg-gray-900 select-none overflow-hidden">
          <div className="absolute inset-0 bg-gradient-to-br from-indigo-900 to-black z-0"></div>
          <img 
-            src={customAssets.backgroundImage || BACKGROUND_IMAGE} 
-            alt="Background" 
-            className="absolute inset-0 w-full h-full object-cover opacity-60 z-10 scale-105"
-            style={{ animation: 'breathe 20s ease-in-out infinite' }}
-         />
+    key={bgUrl}
+    src={customAssets.backgroundImage || bgUrl} 
+    alt="Background" 
+    loading="eager"
+    decoding="async"
+    className="absolute inset-0 w-full h-full object-cover opacity-60 z-10 scale-105 transition-all duration-1000 ease-in-out"
+    style={{ animation: 'breathe 20s ease-in-out infinite' }}
+/>
          <div className="absolute inset-0 bg-black/30 z-20 pointer-events-none" />
          <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/diagmonds-light.png')] opacity-10 pointer-events-none mix-blend-overlay"></div>
      </div>
@@ -601,23 +652,23 @@ const App: React.FC = () => {
                     key={id} 
                     className={`
                         group relative 
-                        flex-none w-[85vw] snap-center md:flex-1 md:w-auto
+                        flex-none w-[85vw] snap-center md:flex-1
                         h-full 
-                        transition-[flex-grow,background-color] duration-500 ease-out 
                         border-r border-white/5 
                         overflow-hidden 
-                        md:hover:flex-[1.8] cursor-pointer
-                        bg-black/20 hover:bg-black/0
+                        cursor-pointer
+                        bg-black/40 
+                        transition-opacity duration-300
                     `}
                     onClick={() => setLobbySelectedChar(id)}
                   >
-                        <div className={`absolute inset-0 opacity-0 md:group-hover:opacity-20 transition-opacity duration-500 ${char.color} bg-gradient-to-t from-black via-transparent to-transparent`}></div>
+                        <div className={`absolute inset-0 opacity-0 md:group-hover:opacity-20 transition-opacity duration-300 ${char.color} bg-gradient-to-t from-black via-transparent to-transparent`}></div>
                         
                         <div className="absolute top-4 right-4 text-[100px] font-black text-white/5 italic leading-none select-none z-0">
                             0{index + 1}
                         </div>
 
-                        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-full h-[90%] md:h-[95%] flex items-end justify-center transition-transform duration-500 md:group-hover:scale-110 origin-bottom">
+                        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-full h-[90%] md:h-[95%] flex items-end justify-center origin-bottom">
                             <CharacterSprite 
                                 character={displayChar} 
                                 isSpeaking={false} 
@@ -625,9 +676,9 @@ const App: React.FC = () => {
                             />
                         </div>
 
-                        <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black via-black/80 to-transparent pt-20 pb-10 px-6 flex flex-col items-center md:items-start transition-all duration-300 md:opacity-60 md:group-hover:opacity-100">
+                        <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black via-black/80 to-transparent pt-20 pb-10 px-6 flex flex-col items-center md:items-start md:opacity-60 md:group-hover:opacity-100 transition-opacity duration-300">
                              <div className={`h-1 w-12 mb-2 ${char.color}`}></div>
-                             <h3 className="text-3xl md:text-4xl font-black text-white italic uppercase tracking-tighter drop-shadow-lg transform -skew-x-6">{displayName}</h3>
+                             <h3 className="text-3xl md:text-4xl font-black text-white italic uppercase tracking-tighter drop-shadow-lg">{displayName}</h3>
                              <p className="text-[10px] text-white/70 uppercase tracking-widest hidden md:block">{displayRole}</p>
                         </div>
                   </div>
@@ -676,6 +727,12 @@ const App: React.FC = () => {
             onContextMenu={handleContextMenu}
             onClick={() => { if(contextMenu) setContextMenu(null); }}
         >
+            {/* 🔍 调试信息面板 */}
+            <div className="absolute top-1 left-1 z-[200] bg-black/70 text-white text-[10px] p-2 rounded font-mono">
+              <div>outfit: {currentOutfit || '(empty)'}</div>
+              <div>emotion: {currentEmotion}</div>
+            </div>
+            
             {renderBackground()}
 
             {isTranslating && (
@@ -749,6 +806,60 @@ const App: React.FC = () => {
                             {T.gotIt}
                         </button>
                     </div>
+                )}
+
+                {/* --- 👔 换装控制条 (放在 DialogueBox 上面一点的位置) --- */}
+                {gameMode === GameMode.CHAT && (
+                  <div className="absolute top-20 right-4 z-50 flex flex-col gap-2 bg-black/40 p-2 rounded-lg backdrop-blur-sm border border-white/10">
+                    <span className="text-[10px] text-white/50 uppercase font-bold text-center">Costume</span>
+                    
+                    {/* 校服 (默认) */}
+                    <button 
+                      onClick={() => setCurrentOutfit('')}
+                      className={`px-3 py-1 text-xs rounded border transition-all ${currentOutfit === '' ? 'bg-white text-black border-white' : 'text-white border-white/20 hover:bg-white/10'}`}
+                    >
+                      校服
+                    </button>
+
+                    {/* 私服 */}
+                    <button 
+                      onClick={() => setCurrentOutfit('casual')}
+                      className={`px-3 py-1 text-xs rounded border transition-all ${currentOutfit === 'casual' ? 'bg-pink-500 text-white border-pink-500' : 'text-white border-white/20 hover:bg-white/10'}`}
+                    >
+                      私服
+                    </button>
+
+                    {/* 泳装 */}
+                    <button 
+                      onClick={() => setCurrentOutfit('swim')}
+                      className={`px-3 py-1 text-xs rounded border transition-all ${currentOutfit === 'swim' ? 'bg-blue-500 text-white border-blue-500' : 'text-white border-white/20 hover:bg-white/10'}`}
+                    >
+                      泳装
+                    </button>
+                    
+                    {/* 运动服 */}
+                    <button 
+                      onClick={() => setCurrentOutfit('gym')}
+                      className={`px-3 py-1 text-xs rounded border transition-all ${currentOutfit === 'gym' ? 'bg-red-500 text-white border-red-500' : 'text-white border-white/20 hover:bg-white/10'}`}
+                    >
+                      运动
+                    </button>
+
+                    {/* 特殊 (Haku的王子装/Ren的战斗装等) */}
+                    <button 
+                      onClick={() => setCurrentOutfit(
+                        // 根据当前角色ID判断特殊服装的前缀 (简单判断一下)
+                        selectedCharId === 'haku' ? 'prince' : 
+                        selectedCharId === 'ren' ? 'fantasy' : 
+                        selectedCharId === 'asuka' ? 'maid' : 
+                        selectedCharId === 'hikari' ? 'yukata' : 
+                        selectedCharId === 'rei' ? 'kimono' : 'special'
+                      )}
+                      className={`px-3 py-1 text-xs rounded border transition-all ${['prince','fantasy','maid','yukata','kimono'].includes(currentOutfit) ? 'bg-purple-500 text-white border-purple-500' : 'text-white border-white/20 hover:bg-white/10'}`}
+                    >
+                      特殊
+                    </button>
+                  </div>
                 )}
 
                 {!isLoading && lastModelMsg?.pages && !isDialogueFinished && !currentQuiz && (

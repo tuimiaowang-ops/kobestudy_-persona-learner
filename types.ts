@@ -18,14 +18,24 @@ export interface Character {
   roleEn: string;
   description: string;
   descriptionEn: string;
-  avatarUrl: string; // Default (neutral) URL
-  basePrompt: string;
-  seed: number;
-  emotionMap: Record<string, string>; // Pre-generated URLs for caching
+
+  // --- 视觉相关 ---
+  avatarUrl: string;
+  // 必须有的表情映射表
+  emotionMap: Record<string, string>;
+  // 以前可能叫 accentColor，现在统一叫 color
   color: string;
-  accentColor: string;
-  greeting: string;
+
+  // --- AI 与对话相关 ---
+  // 以前可能叫 greeting，现在统一叫 firstMessage
+  firstMessage: string;
+  // 以前可能叫 basePrompt，现在统一叫 systemPrompt
   systemPrompt: string;
+
+  // ❌ 删掉了 basePrompt (因为我们用本地图片了，不需要 AI 画图提示词)
+  // ❌ 删掉了 seed (同上)
+  // ❌ 删掉了 greeting (被 firstMessage 取代)
+  // ❌ 删掉了 accentColor (被 color 取代)
 }
 
 export enum GameMode {

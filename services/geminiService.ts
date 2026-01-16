@@ -10,13 +10,43 @@ import { Character, ChatMode, N3GrammarTopic, DialoguePage, WordReading, Message
 // 定义超时时间
 const TIMEOUT_MS = 15000;
 
+// 定义每个角色拥有的服装代码 (对应你文件名及其前缀)
+const WARDROBE: Record<string, string[]> = {
+  'asuka':  ['casual', 'gym', 'swim', 'maid', 'autumn'],
+  'hikari': ['casual', 'gym', 'swim', 'yukata', 'autumn'],
+  'rei':    ['casual', 'lab', 'gym', 'swim', 'kimono'],
+  'ren':    ['casual', 'gym', 'fantasy', 'butler', 'lecturing'],
+  'haku':   ['casual', 'apron', 'summer', 'prince']
+};
+
 // 【修复点1】明确指定 chatSession 的类型，不再用 loose 的 any
 let chatSession: ChatSession | null = null;
 
 const getGenAI = () => {
+  // ✅ 改回从环境变量读取
   const key = import.meta.env.VITE_GOOGLE_API_KEY as string;
+
+  // ❌ 删掉这行硬编码的 key
+  // const key = "AIzaSyD....."; 
+
   if (!key) throw new Error("API Key missing. Please set VITE_GOOGLE_API_KEY in .env.local");
   return new GoogleGenerativeAI(key);
+};
+  
+  const genAI = new GoogleGenerativeAI(key);
+
+  // 🔥 新增：侦探代码 —— 列出所有可用模型
+  // 即使报错，也会尝试打印列表
+  try {
+      // 这是一个隐藏的 API 方法，用来查户口
+      // 我们暂时用 any 绕过类型检查，只为了看结果
+      const modelManager = genAI.getGenerativeModel({ model: 'gemini-pro' }); 
+      console.log("正在查询可用模型...");
+  } catch (e) {
+      // 忽略
+  }
+  
+  return genAI;
 };
 
 const withTimeout = <T>(promise: Promise<T>, ms: number, errorMsg: string): Promise<T> => {
@@ -32,6 +62,7 @@ const withTimeout = <T>(promise: Promise<T>, ms: number, errorMsg: string): Prom
 const getSystemInstruction = (character: Character, mode: ChatMode, goal: string, topic: N3GrammarTopic, lang: Language) => {
   const personaBase = character.systemPrompt;
   const pedagogicalLang = lang === 'en' ? 'English' : 'Chinese (Simplified)';
+  const availableOutfits = WARDROBE[character.id] ? WARDROBE[character.id].join(', ') : 'none';
   const quizInstruction = mode === ChatMode.STUDY 
     ? `4. Quiz (quiz): Include 1 multiple-choice question (4 options) related to the grammar topic "${topic}". The explanation must be in ${pedagogicalLang}.`
     : `4. Quiz (quiz): Not needed for FREE_TALK. Set quiz field to null.`;
@@ -50,6 +81,16 @@ const getSystemInstruction = (character: Character, mode: ChatMode, goal: string
     2. Furigana: DO NOT include reading in parentheses inside text (e.g. "漢字(かんじ)" is BANNED).
     3. Vocabulary List: Extract N3 level words from the text.
     4. Emotion: Choose ONE keyword exactly: "neutral", "happy", "angry", "sad", "shy", "surprised".
+    5. Outfit Change: You have access to these outfit codes: [ ${availableOutfits} ].
+       - Default: "" (Empty string means School Uniform).
+       - TRIGGER 1 (Context): If the story moves to a specific location, AUTO-CHANGE outfit.
+         e.g., Beach/Pool -> 'swim'
+         e.g., Gym/PE Class -> 'gym'
+         e.g., Date/Weekend/Street -> 'casual'
+         e.g., Cooking/Maid -> 'apron' (if available)
+         e.g., Lab/Science -> 'lab' (if available)
+       - TRIGGER 2 (Command): If user says "Let's go to the beach" or "Wear your swimsuit", YOU MUST change outfit to 'swim'.
+       - TRIGGER 3 (Reset): If story returns to school/classroom, set outfit to "" (empty).
     ${quizInstruction}`;
 };
 
@@ -83,6 +124,10 @@ const responseSchema: Schema = {
       type: SchemaType.STRING,
       description: "One of: 'neutral', 'happy', 'angry', 'sad', 'shy', 'surprised'"
     },
+    outfit: {
+      type: SchemaType.STRING,
+      description: "Code for the outfit based on context. Empty string for default uniform."
+    },
     quiz: {
       type: SchemaType.OBJECT,
       properties: {
@@ -97,7 +142,7 @@ const responseSchema: Schema = {
   required: ["pages", "vocabulary"],
 };
 
-const parseResponse = (text: string): { pages: DialoguePage[], vocabulary: WordReading[], quiz?: any, emotion?: string } => {
+const parseResponse = (text: string): { pages: DialoguePage[], vocabulary: WordReading[], quiz?: any, emotion?: string, outfit?: string } => {
     try {
         let cleanJson = text.trim();
         if (cleanJson.startsWith('```json')) {
@@ -107,6 +152,7 @@ const parseResponse = (text: string): { pages: DialoguePage[], vocabulary: WordR
         }
         
         const parsed = JSON.parse(cleanJson);
+        console.log('🎬 Parsed Response:', { outfit: parsed.outfit, emotion: parsed.emotion, hasPages: !!parsed.pages });
         if (!parsed.pages || !Array.isArray(parsed.pages)) {
             parsed.pages = [{ type: 'speech', text: "（静かに頷く）" }];
         }
@@ -123,7 +169,7 @@ const parseResponse = (text: string): { pages: DialoguePage[], vocabulary: WordR
 
 export const translateText = async (text: string, targetLang: Language): Promise<string> => {
     const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
     const target = targetLang === 'en' ? 'English' : 'Chinese (Simplified)';
     try {
         const result = await model.generateContent(
@@ -143,11 +189,11 @@ export const startChat = async (
     topic: N3GrammarTopic,
     lang: Language,
     history: Message[] = []
-): Promise<{pages: DialoguePage[], vocabulary: WordReading[], emotion?: string}> => {
+): Promise<{pages: DialoguePage[], vocabulary: WordReading[], emotion?: string, outfit?: string}> => {
   const genAI = getGenAI();
   
   const model = genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-flash-latest',
     systemInstruction: getSystemInstruction(character, mode, goal, topic, lang),
     generationConfig: {
         temperature: 0.7,
@@ -177,7 +223,8 @@ export const startChat = async (
     return { 
         pages: parsed.pages || [], 
         vocabulary: parsed.vocabulary || [],
-        emotion: parsed.emotion 
+        emotion: parsed.emotion,
+        outfit: parsed.outfit 
     };
   } catch (error: any) {
     return { 
@@ -187,7 +234,7 @@ export const startChat = async (
   }
 };
 
-export const sendMessage = async (text: string, isQuizRequest: boolean = false): Promise<{ pages: DialoguePage[], vocabulary: WordReading[], quiz?: any, emotion?: string }> => {
+export const sendMessage = async (text: string, isQuizRequest: boolean = false): Promise<{ pages: DialoguePage[], vocabulary: WordReading[], quiz?: any, emotion?: string, outfit?: string }> => {
   if (!chatSession) {
       throw new Error("Session lost. Please re-enter chat.");
   }
@@ -200,11 +247,13 @@ export const sendMessage = async (text: string, isQuizRequest: boolean = false):
         "Server response timeout."
     );
     const parsed = parseResponse(result.response.text());
+    console.log('📤 sendMessage returning outfit:', parsed.outfit);
     return { 
         pages: parsed.pages, 
         vocabulary: parsed.vocabulary,
         quiz: parsed.quiz,
-        emotion: parsed.emotion
+        emotion: parsed.emotion,
+        outfit: parsed.outfit
     };
   } catch (error: any) {
     throw new Error(error.message);
