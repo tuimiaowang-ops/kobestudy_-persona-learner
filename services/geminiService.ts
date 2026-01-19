@@ -19,36 +19,17 @@ const WARDROBE: Record<string, string[]> = {
   'haku':   ['casual', 'apron', 'summer', 'prince']
 };
 
-// 【修复点1】明确指定 chatSession 的类型，不再用 loose 的 any
+// 全局对话 Session
 let chatSession: ChatSession | null = null;
 
+// 1. 获取 AI 实例
 const getGenAI = () => {
-  // ✅ 改回从环境变量读取
   const key = import.meta.env.VITE_GOOGLE_API_KEY as string;
-
-  // ❌ 删掉这行硬编码的 key
-  // const key = "AIzaSyD....."; 
-
   if (!key) throw new Error("API Key missing. Please set VITE_GOOGLE_API_KEY in .env.local");
   return new GoogleGenerativeAI(key);
 };
-  
-  const genAI = new GoogleGenerativeAI(key);
 
-  // 🔥 新增：侦探代码 —— 列出所有可用模型
-  // 即使报错，也会尝试打印列表
-  try {
-      // 这是一个隐藏的 API 方法，用来查户口
-      // 我们暂时用 any 绕过类型检查，只为了看结果
-      const modelManager = genAI.getGenerativeModel({ model: 'gemini-pro' }); 
-      console.log("正在查询可用模型...");
-  } catch (e) {
-      // 忽略
-  }
-  
-  return genAI;
-};
-
+// 2. 超时控制辅助函数
 const withTimeout = <T>(promise: Promise<T>, ms: number, errorMsg: string): Promise<T> => {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(errorMsg)), ms);
@@ -59,6 +40,7 @@ const withTimeout = <T>(promise: Promise<T>, ms: number, errorMsg: string): Prom
     });
 };
 
+// 3. 生成系统提示词 (包含强力的场景和换装逻辑)
 const getSystemInstruction = (character: Character, mode: ChatMode, goal: string, topic: N3GrammarTopic, lang: Language) => {
   const personaBase = character.systemPrompt;
   const pedagogicalLang = lang === 'en' ? 'English' : 'Chinese (Simplified)';
@@ -74,27 +56,45 @@ const getSystemInstruction = (character: Character, mode: ChatMode, goal: string
     Grammar Focus: ${topic}
     Current Mode: ${mode === ChatMode.STUDY ? 'STUDY Mode' : 'FREE_TALK Mode'}
     User Language: ${pedagogicalLang} (Use this language for explanations/feedback)
-    
-    【Output Format】
-    You are a visual novel character. Response must be JSON.
-    1. Page Config: Max 80 chars per 'text' page. 3-5 pages total.
-    2. Furigana: DO NOT include reading in parentheses inside text (e.g. "漢字(かんじ)" is BANNED).
-    3. Vocabulary List: Extract N3 level words from the text.
-    4. Emotion: Choose ONE keyword exactly: "neutral", "happy", "angry", "sad", "shy", "surprised".
-    5. Outfit Change: You have access to these outfit codes: [ ${availableOutfits} ].
-       - Default: "" (Empty string means School Uniform).
-       - TRIGGER 1 (Context): If the story moves to a specific location, AUTO-CHANGE outfit.
-         e.g., Beach/Pool -> 'swim'
-         e.g., Gym/PE Class -> 'gym'
-         e.g., Date/Weekend/Street -> 'casual'
-         e.g., Cooking/Maid -> 'apron' (if available)
-         e.g., Lab/Science -> 'lab' (if available)
-       - TRIGGER 2 (Command): If user says "Let's go to the beach" or "Wear your swimsuit", YOU MUST change outfit to 'swim'.
-       - TRIGGER 3 (Reset): If story returns to school/classroom, set outfit to "" (empty).
+
+    [SCENE & OUTFIT RULES - HIGH PRIORITY]
+    1. LOCATION (Field: 'location'):
+       You MUST change the 'location' field IMMEDIATELY if the topic touches these keywords:
+       - Study/Homework/Exam/Book -> 'library'
+       - Rest/Sleep/Home/Visit -> 'room'
+       - Eat/Cook/Hungry -> 'kitchen' or 'cafe'
+       - Walk/Date/Meet -> 'street' or 'park'
+       - Exercise/Sport/Run -> 'gym' or 'park'
+       - Swim/Beach/Sea -> 'beach'
+       - Class/School/Morning -> 'classroom'
+       - Secret/Talk/Wind -> 'rooftop'
+       - Pray/Luck/New Year -> 'shrine'
+       - Fantasy/Magic/Battle -> 'castle'
+       - Science/Experiment -> 'lab'
+       - Festival/Fireworks -> 'festival'
+       
+       *Logic*: If user says "Let's study", respond with location: "library". Do NOT wait.
+
+    2. OUTFIT (Field: 'outfit'):
+       Change outfit ONLY if logical context requires it (e.g., swimming -> 'swim').
+       - Default: "" (School Uniform)
+       - Codes: [ ${availableOutfits} ]
+       - TRIGGER: If user commands "Change to casual" or "Wear swimsuit", OBEY immediately.
+       - TRIGGER: If location changes to 'beach', set outfit to 'swim'.
+       - TRIGGER: If location changes to 'gym', set outfit to 'gym'.
+
+    3. OUTPUT FORMAT:
+       You are a visual novel character. Response must be JSON.
+       1. Page Config: Max 80 chars per 'text' page. 3-5 pages total.
+       2. Furigana: DO NOT include reading in parentheses inside text.
+       3. Vocabulary List: Extract N3 level words.
+       4. Emotion: Choose ONE keyword exactly: "neutral", "happy", "angry", "sad", "shy", "surprised".
+       5. Location: REQUIRED. Current scene ID from the rules above.
+       6. Outfit: Code for outfit change.
     ${quizInstruction}`;
 };
 
-// 【修复点2】显式声明 responseSchema 为 Schema 类型，解决类型不匹配报错
+// 4. 定义返回数据的格式 (包含 outfit 和 location)
 const responseSchema: Schema = {
   type: SchemaType.OBJECT,
   properties: {
@@ -120,14 +120,13 @@ const responseSchema: Schema = {
         required: ["word", "reading"],
       },
     },
-    emotion: {
-      type: SchemaType.STRING,
-      description: "One of: 'neutral', 'happy', 'angry', 'sad', 'shy', 'surprised'"
+    emotion: { type: SchemaType.STRING },
+    // 🔥 新增：独立的场景字段 (必填)
+    location: { 
+      type: SchemaType.STRING, 
+      description: "Scene ID based on conversation topic. E.g., 'library', 'beach', 'room'." 
     },
-    outfit: {
-      type: SchemaType.STRING,
-      description: "Code for the outfit based on context. Empty string for default uniform."
-    },
+    outfit: { type: SchemaType.STRING, description: "Code for the outfit based on context. Empty string for default uniform." },
     quiz: {
       type: SchemaType.OBJECT,
       properties: {
@@ -139,12 +138,14 @@ const responseSchema: Schema = {
       required: ["question", "options", "correctIndex", "explanation"],
     },
   },
-  required: ["pages", "vocabulary"],
+  required: ["pages", "vocabulary", "location"], // 👈 这里 location 是必须的
 };
 
-const parseResponse = (text: string): { pages: DialoguePage[], vocabulary: WordReading[], quiz?: any, emotion?: string, outfit?: string } => {
+// 5. 解析 AI 返回的 JSON
+const parseResponse = (text: string): { pages: DialoguePage[], vocabulary: WordReading[], quiz?: any, emotion?: string, outfit?: string, location?: string } => {
     try {
         let cleanJson = text.trim();
+        // 清理 markdown 标记
         if (cleanJson.startsWith('```json')) {
             cleanJson = cleanJson.replace(/^```json/, '').replace(/```$/, '');
         } else if (cleanJson.startsWith('```')) {
@@ -152,7 +153,8 @@ const parseResponse = (text: string): { pages: DialoguePage[], vocabulary: WordR
         }
         
         const parsed = JSON.parse(cleanJson);
-        console.log('🎬 Parsed Response:', { outfit: parsed.outfit, emotion: parsed.emotion, hasPages: !!parsed.pages });
+        console.log('🎬 Parsed Response:', { location: parsed.location, outfit: parsed.outfit, emotion: parsed.emotion });
+        
         if (!parsed.pages || !Array.isArray(parsed.pages)) {
             parsed.pages = [{ type: 'speech', text: "（静かに頷く）" }];
         }
@@ -167,6 +169,7 @@ const parseResponse = (text: string): { pages: DialoguePage[], vocabulary: WordR
     }
 };
 
+// 6. 翻译功能
 export const translateText = async (text: string, targetLang: Language): Promise<string> => {
     const genAI = getGenAI();
     const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
@@ -182,6 +185,7 @@ export const translateText = async (text: string, targetLang: Language): Promise
     }
 };
 
+// 7. 开始对话 (初始化)
 export const startChat = async (
     character: Character, 
     mode: ChatMode, 
@@ -189,9 +193,10 @@ export const startChat = async (
     topic: N3GrammarTopic,
     lang: Language,
     history: Message[] = []
-): Promise<{pages: DialoguePage[], vocabulary: WordReading[], emotion?: string, outfit?: string}> => {
+): Promise<{pages: DialoguePage[], vocabulary: WordReading[], emotion?: string, outfit?: string, location?: string}> => {
   const genAI = getGenAI();
   
+  // 使用 gemini-flash-latest
   const model = genAI.getGenerativeModel({
     model: 'gemini-flash-latest',
     systemInstruction: getSystemInstruction(character, mode, goal, topic, lang),
@@ -211,20 +216,19 @@ export const startChat = async (
   }
 
   try {
-    // 【修复点3】显式告诉 withTimeout 返回的是 GenerateContentResult
     const result = await withTimeout<GenerateContentResult>(
-        chatSession.sendMessage("Start the conversation based on the context."),
+        chatSession.sendMessage("Start the conversation based on the context. Set initial location."),
         TIMEOUT_MS,
         "Timeout connecting to AI."
     );
     
-    // 这里的 result 已经被正确识别，不会报 unknown 错误了
     const parsed = parseResponse(result.response.text());
     return { 
         pages: parsed.pages || [], 
         vocabulary: parsed.vocabulary || [],
         emotion: parsed.emotion,
-        outfit: parsed.outfit 
+        outfit: parsed.outfit,
+        location: parsed.location // 返回 location
     };
   } catch (error: any) {
     return { 
@@ -234,26 +238,33 @@ export const startChat = async (
   }
 };
 
-export const sendMessage = async (text: string, isQuizRequest: boolean = false): Promise<{ pages: DialoguePage[], vocabulary: WordReading[], quiz?: any, emotion?: string, outfit?: string }> => {
+// 8. 发送消息
+export const sendMessage = async (text: string, isQuizRequest: boolean = false): Promise<{ pages: DialoguePage[], vocabulary: WordReading[], quiz?: any, emotion?: string, outfit?: string, location?: string }> => {
   if (!chatSession) {
       throw new Error("Session lost. Please re-enter chat.");
   }
 
   try {
-    // 【修复点3】同上，显式泛型
     const result = await withTimeout<GenerateContentResult>(
         chatSession.sendMessage(text),
         TIMEOUT_MS,
         "Server response timeout."
     );
     const parsed = parseResponse(result.response.text());
-    console.log('📤 sendMessage returning outfit:', parsed.outfit);
+    
+    // 调试日志
+    console.log('📤 sendMessage response:', { 
+        outfit: parsed.outfit, 
+        location: parsed.location 
+    });
+
     return { 
         pages: parsed.pages, 
-        vocabulary: parsed.vocabulary,
+        vocabulary: parsed.vocabulary, 
         quiz: parsed.quiz,
         emotion: parsed.emotion,
-        outfit: parsed.outfit
+        outfit: parsed.outfit,
+        location: parsed.location // 返回 location
     };
   } catch (error: any) {
     throw new Error(error.message);

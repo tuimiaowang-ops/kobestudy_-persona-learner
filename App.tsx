@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { GameMode, ChatMode, Character, UserState, N3GrammarTopic, CharacterId, Message, CustomAssets, DialoguePage, WordReading, QuizData, CollectedWord, Language } from './types';
-import { CHARACTERS, BACKGROUND_IMAGE, BACKGROUND_MAP, UI_TEXT } from './constants';
+import { CHARACTERS, SCENE_MAP, DEFAULT_SCENE, UI_TEXT } from './constants';
 import { startChat, sendMessage, translateText } from './services/geminiService';
 import CharacterSprite from './components/CharacterSprite';
 import DialogueBox from './components/DialogueBox';
@@ -68,14 +68,18 @@ const App: React.FC = () => {
   const [translationResult, setTranslationResult] = useState<{ original: string, translation: string } | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
   
-  // 👔 新增：当前服装状态 (默认为空字符串，代表基础校服)
-  // 可选值对应你图片的前缀: 'casual', 'gym', 'swim', 'maid', 'prince' 等
+// ... currentOutfit 定义在上面 ...
   const [currentOutfit, setCurrentOutfit] = useState<string>('');
 
-  // 🔥 计算背景图 URL
-  // 逻辑：如果有对应服装的背景就用，没有就用 default
-  const bgUrl = BACKGROUND_MAP[currentOutfit] || BACKGROUND_MAP['default'];
-  console.log('🎬 Background Update:', { currentOutfit, bgUrl });
+  // 🌍【新增】场景状态 (初始为默认场景)
+  const [currentScene, setCurrentScene] = useState<string>(DEFAULT_SCENE);
+
+  // 🔥【核心】计算背景图 URL
+  // 逻辑：尝试从 SCENE_MAP 里找 currentScene，找不到就用 DEFAULT_SCENE
+  const bgUrl = SCENE_MAP[currentScene] || SCENE_MAP[DEFAULT_SCENE];
+  
+  // 调试日志 (按 F12 看控制台能看到背景变没变)
+  console.log('🎬 Background Logic:', { currentScene, bgUrl });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const historyEndRef = useRef<HTMLDivElement>(null);
@@ -226,7 +230,7 @@ const App: React.FC = () => {
     setGameMode(GameMode.LOBBY);
   };
 
-  const enterChat = async (charId: CharacterId, mode: ChatMode) => {
+const enterChat = async (charId: CharacterId, mode: ChatMode) => {
     setSelectedCharId(charId);
     setLobbySelectedChar(null);
     setChatMode(mode);
@@ -237,7 +241,10 @@ const App: React.FC = () => {
     setCurrentQuiz(null);
     setIsDialogueFinished(false);
     setCurrentEmotion('neutral');
-    setCurrentOutfit(''); // 🔥 进入对话时重置为校服
+    
+    // 🔥 重置状态
+    setCurrentOutfit(''); 
+    setCurrentScene(DEFAULT_SCENE); // 重置回教室
 
     try {
       const result = await startChat(
@@ -247,6 +254,7 @@ const App: React.FC = () => {
           userState.grammarTopic,
           userState.language
       );
+      
       const greetingMsg: Message = { 
         id: 'init-' + Date.now(), 
         role: 'model', 
@@ -254,15 +262,21 @@ const App: React.FC = () => {
         pages: result.pages,
         vocabulary: result.vocabulary,
         emotion: result.emotion,
+        outfit: result.outfit,
+        location: result.location, // 记录 location
         senderName: CHARACTERS[charId].name
       };
       
       setMessages([greetingMsg]);
       setCurrentEmotion(result.emotion || 'neutral');
       
-      // 🔥 如果初始问候中有 outfit 指令，执行换装
-      if (result.outfit !== undefined) {
-        setCurrentOutfit(result.outfit);
+      // 🔥 处理开场白的特殊指令
+      if (result.outfit) setCurrentOutfit(result.outfit);
+      
+      // 🔥【关键】如果开场白就指定了场景 (比如设定是"海边约会")
+      if (result.location && SCENE_MAP[result.location]) {
+          console.log("🌍 Init Scene:", result.location);
+          setCurrentScene(result.location);
       }
       
       setChatHistories(prev => ({
@@ -277,12 +291,13 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSendMessage = async (customPrompt?: string) => {
+const handleSendMessage = async (customPrompt?: string) => {
     if (!selectedCharId || (isLoading && !customPrompt)) return;
     if (!customPrompt && !inputText.trim()) return;
 
     const isInternalTrigger = !!customPrompt;
     
+    // 1. 处理用户消息
     if (!isInternalTrigger) {
       const userMsg: Message = { 
           id: Date.now().toString(), 
@@ -306,7 +321,9 @@ const App: React.FC = () => {
     setCurrentQuiz(null);
 
     try {
+      // 2. 发送给 AI
       const response = await sendMessage(currentInput, false);
+      
       const modelMsg: Message = { 
         id: (Date.now() + 1).toString(), 
         role: 'model', 
@@ -315,21 +332,28 @@ const App: React.FC = () => {
         vocabulary: response.vocabulary,
         quiz: response.quiz,
         emotion: response.emotion,
+        outfit: response.outfit,
+        location: response.location, // 记录 location
         senderName: CHARACTERS[selectedCharId].name
       };
 
       setMessages(prev => [...prev, modelMsg]);
       setCurrentEmotion(response.emotion || 'neutral');
       
-      // 🔥【关键修改】如果 AI 说了要换衣服，我们就换！
-      console.log('🤖 Full Response:', response);
+      // 🔥 处理服装 (Outfit)
       if (response.outfit !== undefined) {
-        // 如果 AI 返回空字符串 ""，意思是换回校服
-        // 如果 AI 返回 "swim"，意思是换泳装
-        console.log("✨ AI Requesting Outfit Change:", response.outfit);
         setCurrentOutfit(response.outfit);
-      } else {
-        console.log("⚠️ AI did not return outfit field");
+      }
+
+      // 🔥【关键】处理场景 (Location)
+      // AI 发回 location -> 检查我们的地图里有没有 -> 有就切换
+      if (response.location) {
+          console.log("🌍 AI Requested Scene Change:", response.location);
+          if (SCENE_MAP[response.location]) {
+              setCurrentScene(response.location);
+          } else {
+              console.warn(`⚠️ Scene '${response.location}' not found in SCENE_MAP`);
+          }
       }
       
       setChatHistories(prev => ({
@@ -470,7 +494,7 @@ const App: React.FC = () => {
   };
 
   const renderBackground = () => (
-     <div className="absolute inset-0 w-full h-full -z-10 bg-gray-900 select-none overflow-hidden">
+     <div className="absolute inset-0 w-full h-full -z-0 bg-gray-900 select-none overflow-hidden">
          <div className="absolute inset-0 bg-gradient-to-br from-indigo-900 to-black z-0"></div>
          <img 
     key={bgUrl}
@@ -764,10 +788,12 @@ const App: React.FC = () => {
             <div className="absolute inset-0 z-10 flex items-end justify-center pointer-events-none pb-0">
                  <div className="relative h-[85vh] max-h-[90vh] w-auto aspect-[45/70] flex items-end justify-center pointer-events-auto transition-all duration-500 shadow-2xl">
                     <CharacterSprite 
-                        character={activeChar} 
-                        isSpeaking={lastModelMsg?.role === 'model' && !isLoading && !isDialogueFinished} 
-                        className="w-full h-full"
-                    />
+    character={activeChar} 
+    isSpeaking={lastModelMsg?.role === 'model' && !isLoading && !isDialogueFinished} 
+    // 🔥 在这里加上 tachie-anim-breathe
+    // 💡 如果你希望说话时也跳动，可以根据 isSpeaking 动态加 tachie-anim-speak (可选)
+    className={`w-full h-full object-contain tachie-anim-breathe transition-all duration-300`} 
+/>
                 </div>
             </div>
 
@@ -1223,3 +1249,37 @@ const App: React.FC = () => {
 };
 
 export default App;
+// 🌟 放在 src/App.tsx 文件最后 (export default App 后面)
+
+// 注入全局 CSS 动画样式
+const styleSheet = document.createElement("style");
+styleSheet.innerText = `
+  /* 🌬️ 呼吸动画 (Breathing) */
+  @keyframes tachie-breathe {
+    0% { transform: scale(1) translateY(0); }
+    50% { transform: scale(1.02) translateY(-3px); } /* 吸气：轻微放大 + 上浮 */
+    100% { transform: scale(1) translateY(0); }
+  }
+
+  /* 🗣️ 说话跳动动画 (Speaking Bounce) */
+  @keyframes tachie-speak {
+    0% { transform: translateY(0); }
+    15% { transform: translateY(-4px); } /* 快速上跳 */
+    30% { transform: translateY(0); }
+    45% { transform: translateY(-2px); } /* 二次小跳 */
+    100% { transform: translateY(0); }
+  }
+
+  /* 应用到图片的类 */
+  .tachie-anim-breathe {
+    animation: tachie-breathe 5s ease-in-out infinite; /* 5秒一次深呼吸 */
+    transform-origin: bottom center; /* 保证脚底不动 */
+    will-change: transform; /* 性能优化 */
+  }
+
+  .tachie-anim-speak {
+    animation: tachie-speak 0.4s ease-out; /* 说话时的瞬间跳动 */
+    transform-origin: bottom center;
+  }
+`;
+document.head.appendChild(styleSheet);

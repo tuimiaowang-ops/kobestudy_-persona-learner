@@ -83,15 +83,19 @@ export interface CollectedWord {
   timestamp: number;
 }
 
+// 1. 找到 Message 接口，给它加一个 location (可选)
+// 这样我们能在历史记录里知道当时是在哪里说话的
 export interface Message {
   id: string;
   role: 'user' | 'model';
-  text: string; 
+  text: string;
+  senderName?: string;
   pages?: DialoguePage[];
   vocabulary?: WordReading[];
-  quiz?: QuizData;
-  emotion?: string; // Will now map to EmotionType keys
-  senderName?: string; 
+  quiz?: any;
+  emotion?: string;
+  outfit?: string;   // 之前加的
+  location?: string; // 🔥【新增】场景 ID
 }
 
 export interface UserState {
