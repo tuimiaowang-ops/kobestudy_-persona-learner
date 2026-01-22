@@ -7,7 +7,7 @@ import {
 } from "@google/generative-ai";
 import { Character, ChatMode, N3GrammarTopic, DialoguePage, WordReading, Message, Language } from '../types';
 
-const TIMEOUT_MS = 20000; 
+const TIMEOUT_MS = 25000; // 稍微延长超时，因为生成的文本变长了
 
 const WARDROBE: Record<string, string[]> = {
   'asuka':  ['casual', 'gym', 'swim', 'maid', 'autumn'],
@@ -39,7 +39,7 @@ const withTimeout = <T>(promise: Promise<T>, ms: number, errorMsg: string): Prom
     });
 };
 
-// 3. Prompt (保持不变)
+// 3. Prompt (🔥 核心修改：大幅增强了演技指导)
 const getSystemInstruction = (character: Character, mode: ChatMode, goal: string, topic: N3GrammarTopic, lang: Language) => {
   const personaBase = character.systemPrompt;
   const pedagogicalLang = lang === 'en' ? 'English' : 'Chinese (Simplified)';
@@ -49,47 +49,37 @@ const getSystemInstruction = (character: Character, mode: ChatMode, goal: string
     : `4. Quiz (quiz): Not needed for FREE_TALK. Set quiz field to null.`;
 
   return `${personaBase}
-    【IMPORTANT: Research Level】
+    【IMPORTANT: VISUAL NOVEL ROLEPLAY】
     Target Level: JLPT N3 Fixed.
     Vocabulary: Use N3 level Kanji and vocabulary mainly.
     Grammar Focus: ${topic}
     Current Mode: ${mode === ChatMode.STUDY ? 'STUDY Mode' : 'FREE_TALK Mode'}
     User Language: ${pedagogicalLang} (Use this language for explanations/feedback)
 
-    [SCENE & OUTFIT RULES - HIGH PRIORITY]
+    [ACTING INSTRUCTIONS - CRITICAL]
+    You are a character in a high-quality visual novel.
+    1. **Rich Descriptions**: EVERY text box MUST start with a vivid description of actions, expressions, or feelings in parentheses.
+       - BAD: "こんにちは。元気？"
+       - GOOD: "（目を輝かせて、あなたの手を取りながら）こんにちは！ねえ、元気だった？"
+    2. **Length**: Do NOT be brief. Split your response into 2-4 separate 'pages' (array items) to create a rhythmic conversation flow.
+    3. **Personality**: Emphasize your specific character traits (Tsundere/Energetic/Kuudere/Chuunibyou/Butler) in every sentence.
+
+    [SCENE & OUTFIT RULES]
     1. LOCATION (Field: 'location'):
-       You MUST change the 'location' field IMMEDIATELY if the topic touches these keywords:
-       - Study/Homework/Exam/Book -> 'library'
-       - Rest/Sleep/Home/Visit -> 'room'
-       - Eat/Cook/Hungry -> 'kitchen' or 'cafe'
-       - Walk/Date/Meet -> 'street' or 'park'
-       - Exercise/Sport/Run -> 'gym' or 'park'
-       - Swim/Beach/Sea -> 'beach'
-       - Class/School/Morning -> 'classroom'
-       - Secret/Talk/Wind -> 'rooftop'
-       - Pray/Luck/New Year -> 'shrine'
-       - Fantasy/Magic/Battle -> 'castle'
-       - Science/Experiment -> 'lab'
-       - Festival/Fireworks -> 'festival'
-       
-       *Logic*: If user says "Let's study", respond with location: "library". Do NOT wait.
-
+       Change 'location' IMMEDIATELY if the conversation topic implies moving.
+       - Keywords: Study/Library, Home/Room, Eat/Kitchen/Cafe, Walk/Street/Park, Swim/Beach, Class/School, Roof/Rooftop, Shrine, Castle, Lab.
+    
     2. OUTFIT (Field: 'outfit'):
-       Change outfit ONLY if logical context requires it (e.g., swimming -> 'swim').
-       - Default: "" (School Uniform)
-       - Codes: [ ${availableOutfits} ]
-       - TRIGGER: If user commands "Change to casual" or "Wear swimsuit", OBEY immediately.
-       - TRIGGER: If location changes to 'beach', set outfit to 'swim'.
-       - TRIGGER: If location changes to 'gym', set outfit to 'gym'.
+       Change outfit ONLY if context requires it (e.g. swimming -> 'swim', sleeping -> 'casual').
+       - Available codes: [ ${availableOutfits} ]
 
-    3. OUTPUT FORMAT:
+    3. OUTPUT FORMAT (JSON ONLY):
        Response must be strict JSON.
-       1. Page Config: Max 80 chars per 'text' page.
-       2. Furigana: DO NOT include reading in parentheses.
-       3. Vocabulary List: Extract N3 level words.
-       4. Emotion: "neutral", "happy", "angry", "sad", "shy", "surprised".
-       5. Location: REQUIRED. Current scene ID.
-       6. Outfit: Code for outfit change.
+       1. pages: Array of objects. Each object has "text". Max 120 chars per page. Generate 2-4 pages per turn.
+       2. vocabulary: Extract N3 words used.
+       3. emotion: EXACTLY ONE of: "neutral", "happy", "angry", "sad", "shy", "surprised".
+       4. location: Current scene ID.
+       5. outfit: Outfit code (or empty string).
     ${quizInstruction}`;
 };
 
@@ -150,15 +140,14 @@ const parseResponse = (text: string) => {
     }
 };
 
-// 6. 翻译功能 (接收 apiKey 和 modelName)
+// 6. 翻译功能
 export const translateText = async (
     text: string, 
     targetLang: Language, 
     apiKey?: string,
-    modelName: string = 'gemini-1.5-flash-latest' // 🔥 默认模型
+    modelName: string = 'gemini-1.5-flash-latest'
 ): Promise<string> => {
     const genAI = getGenAI(apiKey);
-    // 🔥 使用用户指定的模型
     const model = genAI.getGenerativeModel({ model: modelName });
     
     const target = targetLang === 'en' ? 'English' : 'Chinese (Simplified)';
@@ -173,7 +162,7 @@ export const translateText = async (
     }
 };
 
-// 7. 开始对话 (接收 apiKey 和 modelName)
+// 7. 开始对话
 export const startChat = async (
     character: Character, 
     mode: ChatMode, 
@@ -181,17 +170,16 @@ export const startChat = async (
     topic: N3GrammarTopic,
     lang: Language,
     apiKey?: string,
-    modelName: string = 'gemini-1.5-flash-latest', // 🔥 默认模型
+    modelName: string = 'gemini-1.5-flash-latest',
     history: Message[] = []
 ) => {
   const genAI = getGenAI(apiKey);
   
-  // 🔥 使用用户指定的模型
   const model = genAI.getGenerativeModel({
     model: modelName,
     systemInstruction: getSystemInstruction(character, mode, goal, topic, lang),
     generationConfig: {
-        temperature: 0.7,
+        temperature: 0.75, // 🔥稍微提高温度，增加创造性和丰富度
         responseMimeType: "application/json",
         responseSchema: responseSchema,
     }
@@ -199,14 +187,13 @@ export const startChat = async (
 
   chatSession = model.startChat({ history: [] });
 
-  // 防止参数错位
   if (Array.isArray(history) && history.length > 0) {
       return { pages: [], vocabulary: [] };
   }
 
   try {
     const result = await withTimeout<GenerateContentResult>(
-        chatSession.sendMessage("Start the conversation based on the context. Set initial location."),
+        chatSession.sendMessage("Start the conversation based on the context. Remember to use vivid action descriptions in parentheses."),
         TIMEOUT_MS,
         "Timeout connecting to AI."
     );
