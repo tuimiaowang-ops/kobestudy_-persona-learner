@@ -7,7 +7,7 @@ import {
 } from "@google/generative-ai";
 import { Character, ChatMode, N3GrammarTopic, DialoguePage, WordReading, Message, Language } from '../types';
 
-const TIMEOUT_MS = 20000; // 稍微延长一点超时，因为 Pro 模型比较慢
+const TIMEOUT_MS = 20000; 
 
 const WARDROBE: Record<string, string[]> = {
   'asuka':  ['casual', 'gym', 'swim', 'maid', 'autumn'],
@@ -155,7 +155,7 @@ export const translateText = async (
     text: string, 
     targetLang: Language, 
     apiKey?: string,
-    modelName: string = 'gemini-1.5-flash' // 🔥 默认模型
+    modelName: string = 'gemini-1.5-flash-latest' // 🔥 默认模型
 ): Promise<string> => {
     const genAI = getGenAI(apiKey);
     // 🔥 使用用户指定的模型
@@ -181,7 +181,7 @@ export const startChat = async (
     topic: N3GrammarTopic,
     lang: Language,
     apiKey?: string,
-    modelName: string = 'gemini-1.5-flash', // 🔥 新增参数
+    modelName: string = 'gemini-1.5-flash-latest', // 🔥 默认模型
     history: Message[] = []
 ) => {
   const genAI = getGenAI(apiKey);

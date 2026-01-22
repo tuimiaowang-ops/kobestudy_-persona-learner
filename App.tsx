@@ -7,14 +7,14 @@ import DialogueBox from './components/DialogueBox';
 
 const SAVE_SLOT_PREFIX = 'kobe_study_save_v5_slot_';
 const API_KEY_STORAGE_KEY = 'kobe_study_user_api_key';
-const MODEL_STORAGE_KEY = 'kobe_study_user_model'; // 🔥 存储模型的 key
+const MODEL_STORAGE_KEY = 'kobe_study_user_model'; 
 const MAX_SLOTS = 6;
 
-// 🤖 可选模型列表
+// 🤖 2026年最新模型列表！
 const AVAILABLE_MODELS = [
-  { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash (推荐/快速/免费)' },
-  { value: 'gemini-1.5-pro',   label: 'Gemini 1.5 Pro (更聪明/较慢)' },
-  { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash (新版/不稳定)' },
+  { value: 'gemini-1.5-flash-latest', label: 'Gemini 1.5 Flash (经典/保底)' },
+  { value: 'gemini-2.5-flash',        label: 'Gemini 2.5 Flash (2026主流/高速)' },
+  { value: 'gemini-3.0',              label: 'Gemini 3.0 (最新/超强智能)' },
 ];
 
 const App: React.FC = () => {
@@ -78,16 +78,15 @@ const App: React.FC = () => {
   const [currentOutfit, setCurrentOutfit] = useState<string>('');
   const [currentScene, setCurrentScene] = useState<string>(DEFAULT_SCENE);
 
-  // 🔥 自定义 API Key 和 Model
+  // 🔥 默认模型设为 2.5 Flash，紧跟潮流
   const [customApiKey, setCustomApiKey] = useState('');
-  const [customModel, setCustomModel] = useState('gemini-1.5-flash');
+  const [customModel, setCustomModel] = useState('gemini-2.5-flash');
 
   const bgUrl = SCENE_MAP[currentScene] || SCENE_MAP[DEFAULT_SCENE];
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const historyEndRef = useRef<HTMLDivElement>(null);
   const T = UI_TEXT[userState.language];
 
-  // 🔥 初始化加载 Key 和 Model
   useEffect(() => {
     checkForSaves();
     const storedKey = localStorage.getItem(API_KEY_STORAGE_KEY);
@@ -97,7 +96,6 @@ const App: React.FC = () => {
     if (storedModel) setCustomModel(storedModel);
   }, []);
 
-  // 🔥 Key 变更处理
   const handleApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const val = e.target.value.trim();
       setCustomApiKey(val);
@@ -105,7 +103,6 @@ const App: React.FC = () => {
       else localStorage.removeItem(API_KEY_STORAGE_KEY);
   };
 
-  // 🔥 Model 变更处理
   const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
       const val = e.target.value;
       setCustomModel(val);
@@ -231,7 +228,7 @@ const App: React.FC = () => {
                     data.userState.grammarTopic,
                     data.userState.language || 'zh',
                     customApiKey, 
-                    customModel, // 🔥 传入模型
+                    customModel, 
                     data.messages
                 );
                 setIsDialogueFinished(true);
@@ -274,7 +271,7 @@ const App: React.FC = () => {
           userState.grammarTopic,
           userState.language,
           customApiKey,
-          customModel // 🔥 传入模型
+          customModel 
       );
       const greetingMsg: Message = { 
         id: 'init-' + Date.now(), 
@@ -408,7 +405,7 @@ const App: React.FC = () => {
     setContextMenu(null);
     setIsTranslating(true);
     try {
-        const translation = await translateText(text, userState.language, customApiKey, customModel); // 🔥 传入模型
+        const translation = await translateText(text, userState.language, customApiKey, customModel); 
         setTranslationResult({ original: text, translation });
     } finally {
         setIsTranslating(false);
@@ -421,7 +418,7 @@ const App: React.FC = () => {
     setContextMenu(null);
     setIsTranslating(true);
     try {
-        const translation = await translateText(text, userState.language, customApiKey, customModel); // 🔥 传入模型
+        const translation = await translateText(text, userState.language, customApiKey, customModel);
         const newWord: CollectedWord = {
             id: Date.now().toString(),
             original: text,
@@ -543,7 +540,7 @@ const App: React.FC = () => {
                                             {AVAILABLE_MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                                         </select>
                                     </div>
-                                    <p className="col-span-full text-[10px] text-gray-500 ml-1">* Use 'Gemini 1.5 Flash' for best free experience.</p>
+                                    <p className="col-span-full text-[10px] text-gray-500 ml-1">* Gemini 2.5/3.0 需要2026年最新权限，无权限请切回 1.5 Flash。</p>
                                 </div>
                             </div>
 
@@ -756,7 +753,7 @@ const App: React.FC = () => {
             </div>
         </div>
     </div>
-  );
+  ); // 🔥 之前这里少了这个闭合括号
 
   const renderHistoryLog = () => (
     <div className="fixed inset-0 z-[250] flex items-center justify-center bg-slate-950/95 backdrop-blur-xl" onClick={() => setShowHistoryLog(false)}>
