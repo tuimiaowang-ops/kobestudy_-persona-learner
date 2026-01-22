@@ -7,10 +7,8 @@ import {
 } from "@google/generative-ai";
 import { Character, ChatMode, N3GrammarTopic, DialoguePage, WordReading, Message, Language } from '../types';
 
-// 定义超时时间
-const TIMEOUT_MS = 15000;
+const TIMEOUT_MS = 20000; // 稍微延长一点超时，因为 Pro 模型比较慢
 
-// 定义每个角色拥有的服装代码 (对应你文件名及其前缀)
 const WARDROBE: Record<string, string[]> = {
   'asuka':  ['casual', 'gym', 'swim', 'maid', 'autumn'],
   'hikari': ['casual', 'gym', 'swim', 'yukata', 'autumn'],
@@ -19,17 +17,18 @@ const WARDROBE: Record<string, string[]> = {
   'haku':   ['casual', 'apron', 'summer', 'prince']
 };
 
-// 全局对话 Session
 let chatSession: ChatSession | null = null;
 
 // 1. 获取 AI 实例
-const getGenAI = () => {
-  const key = import.meta.env.VITE_GOOGLE_API_KEY as string;
-  if (!key) throw new Error("API Key missing. Please set VITE_GOOGLE_API_KEY in .env.local");
+const getGenAI = (userApiKey?: string) => {
+  const key = userApiKey || (import.meta.env.VITE_GOOGLE_API_KEY as string);
+  if (!key) {
+    throw new Error("No API Key found. Please provide a key in settings or .env file.");
+  }
   return new GoogleGenerativeAI(key);
 };
 
-// 2. 超时控制辅助函数
+// 2. 超时控制
 const withTimeout = <T>(promise: Promise<T>, ms: number, errorMsg: string): Promise<T> => {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(errorMsg)), ms);
@@ -40,7 +39,7 @@ const withTimeout = <T>(promise: Promise<T>, ms: number, errorMsg: string): Prom
     });
 };
 
-// 3. 生成系统提示词 (包含强力的场景和换装逻辑)
+// 3. Prompt (保持不变)
 const getSystemInstruction = (character: Character, mode: ChatMode, goal: string, topic: N3GrammarTopic, lang: Language) => {
   const personaBase = character.systemPrompt;
   const pedagogicalLang = lang === 'en' ? 'English' : 'Chinese (Simplified)';
@@ -84,17 +83,16 @@ const getSystemInstruction = (character: Character, mode: ChatMode, goal: string
        - TRIGGER: If location changes to 'gym', set outfit to 'gym'.
 
     3. OUTPUT FORMAT:
-       You are a visual novel character. Response must be JSON.
-       1. Page Config: Max 80 chars per 'text' page. 3-5 pages total.
-       2. Furigana: DO NOT include reading in parentheses inside text.
+       Response must be strict JSON.
+       1. Page Config: Max 80 chars per 'text' page.
+       2. Furigana: DO NOT include reading in parentheses.
        3. Vocabulary List: Extract N3 level words.
-       4. Emotion: Choose ONE keyword exactly: "neutral", "happy", "angry", "sad", "shy", "surprised".
-       5. Location: REQUIRED. Current scene ID from the rules above.
+       4. Emotion: "neutral", "happy", "angry", "sad", "shy", "surprised".
+       5. Location: REQUIRED. Current scene ID.
        6. Outfit: Code for outfit change.
     ${quizInstruction}`;
 };
 
-// 4. 定义返回数据的格式 (包含 outfit 和 location)
 const responseSchema: Schema = {
   type: SchemaType.OBJECT,
   properties: {
@@ -103,8 +101,8 @@ const responseSchema: Schema = {
       items: {
         type: SchemaType.OBJECT,
         properties: {
-          type: { type: SchemaType.STRING, description: "'action' or 'speech'" },
-          text: { type: SchemaType.STRING, description: "Dialogue content" },
+          type: { type: SchemaType.STRING },
+          text: { type: SchemaType.STRING },
         },
         required: ["type", "text"],
       },
@@ -121,12 +119,8 @@ const responseSchema: Schema = {
       },
     },
     emotion: { type: SchemaType.STRING },
-    // 🔥 新增：独立的场景字段 (必填)
-    location: { 
-      type: SchemaType.STRING, 
-      description: "Scene ID based on conversation topic. E.g., 'library', 'beach', 'room'." 
-    },
-    outfit: { type: SchemaType.STRING, description: "Code for the outfit based on context. Empty string for default uniform." },
+    location: { type: SchemaType.STRING },
+    outfit: { type: SchemaType.STRING },
     quiz: {
       type: SchemaType.OBJECT,
       properties: {
@@ -138,41 +132,35 @@ const responseSchema: Schema = {
       required: ["question", "options", "correctIndex", "explanation"],
     },
   },
-  required: ["pages", "vocabulary", "location"], // 👈 这里 location 是必须的
+  required: ["pages", "vocabulary", "location"],
 };
 
-// 5. 解析 AI 返回的 JSON
-const parseResponse = (text: string): { pages: DialoguePage[], vocabulary: WordReading[], quiz?: any, emotion?: string, outfit?: string, location?: string } => {
+const parseResponse = (text: string) => {
     try {
         let cleanJson = text.trim();
-        // 清理 markdown 标记
         if (cleanJson.startsWith('```json')) {
             cleanJson = cleanJson.replace(/^```json/, '').replace(/```$/, '');
         } else if (cleanJson.startsWith('```')) {
             cleanJson = cleanJson.replace(/^```/, '').replace(/```$/, '');
         }
-        
-        const parsed = JSON.parse(cleanJson);
-        console.log('🎬 Parsed Response:', { location: parsed.location, outfit: parsed.outfit, emotion: parsed.emotion });
-        
-        if (!parsed.pages || !Array.isArray(parsed.pages)) {
-            parsed.pages = [{ type: 'speech', text: "（静かに頷く）" }];
-        }
-        return parsed;
+        return JSON.parse(cleanJson);
     } catch (e) {
-        console.error("Failed to parse Gemini JSON response:", e);
-        return {
-            pages: [{ type: 'speech', text: "..." }],
-            vocabulary: [],
-            emotion: "neutral"
-        };
+        console.error("JSON Parse Error:", e);
+        return { pages: [{ type: 'speech', text: "..." }], vocabulary: [], emotion: "neutral" };
     }
 };
 
-// 6. 翻译功能
-export const translateText = async (text: string, targetLang: Language): Promise<string> => {
-    const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
+// 6. 翻译功能 (接收 apiKey 和 modelName)
+export const translateText = async (
+    text: string, 
+    targetLang: Language, 
+    apiKey?: string,
+    modelName: string = 'gemini-1.5-flash' // 🔥 默认模型
+): Promise<string> => {
+    const genAI = getGenAI(apiKey);
+    // 🔥 使用用户指定的模型
+    const model = genAI.getGenerativeModel({ model: modelName });
+    
     const target = targetLang === 'en' ? 'English' : 'Chinese (Simplified)';
     try {
         const result = await model.generateContent(
@@ -185,20 +173,22 @@ export const translateText = async (text: string, targetLang: Language): Promise
     }
 };
 
-// 7. 开始对话 (初始化)
+// 7. 开始对话 (接收 apiKey 和 modelName)
 export const startChat = async (
     character: Character, 
     mode: ChatMode, 
     goal: string, 
     topic: N3GrammarTopic,
     lang: Language,
+    apiKey?: string,
+    modelName: string = 'gemini-1.5-flash', // 🔥 新增参数
     history: Message[] = []
-): Promise<{pages: DialoguePage[], vocabulary: WordReading[], emotion?: string, outfit?: string, location?: string}> => {
-  const genAI = getGenAI();
+) => {
+  const genAI = getGenAI(apiKey);
   
-  // 使用 gemini-flash-latest
+  // 🔥 使用用户指定的模型
   const model = genAI.getGenerativeModel({
-    model: 'gemini-flash-latest',
+    model: modelName,
     systemInstruction: getSystemInstruction(character, mode, goal, topic, lang),
     generationConfig: {
         temperature: 0.7,
@@ -207,11 +197,10 @@ export const startChat = async (
     }
   });
 
-  chatSession = model.startChat({
-      history: [], 
-  });
+  chatSession = model.startChat({ history: [] });
 
-  if (history.length > 0) {
+  // 防止参数错位
+  if (Array.isArray(history) && history.length > 0) {
       return { pages: [], vocabulary: [] };
   }
 
@@ -228,18 +217,15 @@ export const startChat = async (
         vocabulary: parsed.vocabulary || [],
         emotion: parsed.emotion,
         outfit: parsed.outfit,
-        location: parsed.location // 返回 location
+        location: parsed.location
     };
   } catch (error: any) {
-    return { 
-        pages: [{ type: 'speech', text: `Error: ${error.message}` }], 
-        vocabulary: [] 
-    };
+    return { pages: [{ type: 'speech', text: `Error: ${error.message}` }], vocabulary: [] };
   }
 };
 
 // 8. 发送消息
-export const sendMessage = async (text: string, isQuizRequest: boolean = false): Promise<{ pages: DialoguePage[], vocabulary: WordReading[], quiz?: any, emotion?: string, outfit?: string, location?: string }> => {
+export const sendMessage = async (text: string, isQuizRequest: boolean = false) => {
   if (!chatSession) {
       throw new Error("Session lost. Please re-enter chat.");
   }
@@ -252,19 +238,13 @@ export const sendMessage = async (text: string, isQuizRequest: boolean = false):
     );
     const parsed = parseResponse(result.response.text());
     
-    // 调试日志
-    console.log('📤 sendMessage response:', { 
-        outfit: parsed.outfit, 
-        location: parsed.location 
-    });
-
     return { 
         pages: parsed.pages, 
         vocabulary: parsed.vocabulary, 
         quiz: parsed.quiz,
         emotion: parsed.emotion,
         outfit: parsed.outfit,
-        location: parsed.location // 返回 location
+        location: parsed.location
     };
   } catch (error: any) {
     throw new Error(error.message);
