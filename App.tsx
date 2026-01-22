@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { GameMode, ChatMode, Character, UserState, N3GrammarTopic, CharacterId, Message, CustomAssets, DialoguePage, WordReading, QuizData, CollectedWord, Language } from './types';
 import { CHARACTERS, SCENE_MAP, DEFAULT_SCENE, UI_TEXT } from './constants';
@@ -7,6 +6,7 @@ import CharacterSprite from './components/CharacterSprite';
 import DialogueBox from './components/DialogueBox';
 
 const SAVE_SLOT_PREFIX = 'kobe_study_save_v5_slot_';
+const API_KEY_STORAGE_KEY = 'kobe_study_user_api_key'; // 🔥 本地存储 Key 的名字
 const MAX_SLOTS = 6;
 
 const App: React.FC = () => {
@@ -21,6 +21,9 @@ const App: React.FC = () => {
     language: 'zh' // Default to Chinese
   });
   
+  // 🔥 新增：自定义 API Key
+  const [customApiKey, setCustomApiKey] = useState('');
+
   const [customAssets, setCustomAssets] = useState<CustomAssets>({
     backgroundImage: null,
     characters: {
@@ -58,7 +61,7 @@ const App: React.FC = () => {
   const [showSystemMenu, setShowSystemMenu] = useState(false);
   const [showHistoryLog, setShowHistoryLog] = useState(false);
   const [showWordbook, setShowWordbook] = useState(false);
-  const [saveLoadMode, setSaveLoadMode] = useState<'SAVE' | 'LOAD' | null>(null); // New state for Save/Load screen
+  const [saveLoadMode, setSaveLoadMode] = useState<'SAVE' | 'LOAD' | null>(null);
   
   const [activeHistoryTab, setActiveHistoryTab] = useState<CharacterId>(CharacterId.ASUKA);
   const [hasAnySave, setHasAnySave] = useState(false);
@@ -68,28 +71,38 @@ const App: React.FC = () => {
   const [translationResult, setTranslationResult] = useState<{ original: string, translation: string } | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
   
-// ... currentOutfit 定义在上面 ...
   const [currentOutfit, setCurrentOutfit] = useState<string>('');
 
-  // 🌍【新增】场景状态 (初始为默认场景)
+  // 🌍 场景状态
   const [currentScene, setCurrentScene] = useState<string>(DEFAULT_SCENE);
 
-  // 🔥【核心】计算背景图 URL
-  // 逻辑：尝试从 SCENE_MAP 里找 currentScene，找不到就用 DEFAULT_SCENE
+  // 🔥 计算背景图 URL
   const bgUrl = SCENE_MAP[currentScene] || SCENE_MAP[DEFAULT_SCENE];
   
-  // 调试日志 (按 F12 看控制台能看到背景变没变)
-  console.log('🎬 Background Logic:', { currentScene, bgUrl });
-
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const historyEndRef = useRef<HTMLDivElement>(null);
 
-  // Shortcut to get current UI text based on selected language
   const T = UI_TEXT[userState.language];
 
+  // 🔥 初始化加载 Key
   useEffect(() => {
     checkForSaves();
+    const storedKey = localStorage.getItem(API_KEY_STORAGE_KEY);
+    if (storedKey) {
+        setCustomApiKey(storedKey);
+    }
   }, []);
+
+  // 🔥 当 Key 变化时保存到本地
+  const handleApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const val = e.target.value.trim();
+      setCustomApiKey(val);
+      if (val) {
+          localStorage.setItem(API_KEY_STORAGE_KEY, val);
+      } else {
+          localStorage.removeItem(API_KEY_STORAGE_KEY);
+      }
+  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -163,7 +176,7 @@ const App: React.FC = () => {
     };
     localStorage.setItem(`${SAVE_SLOT_PREFIX}${slotIndex}`, JSON.stringify(saveData));
     checkForSaves();
-    setSaveLoadMode(null); // Close menu
+    setSaveLoadMode(null);
     setShowSystemMenu(false);
     alert(`${T.gameSaved} (Slot ${slotIndex + 1})`);
   };
@@ -174,7 +187,7 @@ const App: React.FC = () => {
 
     try {
         const fullData = JSON.parse(saved);
-        const data = fullData.data; // Extract actual game data
+        const data = fullData.data;
 
         setUserState(prev => ({
             ...prev,
@@ -198,7 +211,7 @@ const App: React.FC = () => {
         setGameMode(data.gameMode);
         setSaveLoadMode(null);
         setShowSystemMenu(false);
-        setSetupStep('MENU'); // Reset title screen state if loading from there
+        setSetupStep('MENU');
         
         if (data.gameMode === GameMode.CHAT && data.selectedCharId) {
             setIsLoading(true);
@@ -210,6 +223,7 @@ const App: React.FC = () => {
                     data.userState.learningGoal, 
                     data.userState.grammarTopic,
                     data.userState.language || 'zh',
+                    customApiKey, // 🔥 传入自定义 Key
                     data.messages
                 );
                 setIsDialogueFinished(true);
@@ -230,7 +244,7 @@ const App: React.FC = () => {
     setGameMode(GameMode.LOBBY);
   };
 
-const enterChat = async (charId: CharacterId, mode: ChatMode) => {
+  const enterChat = async (charId: CharacterId, mode: ChatMode) => {
     setSelectedCharId(charId);
     setLobbySelectedChar(null);
     setChatMode(mode);
@@ -241,10 +255,8 @@ const enterChat = async (charId: CharacterId, mode: ChatMode) => {
     setCurrentQuiz(null);
     setIsDialogueFinished(false);
     setCurrentEmotion('neutral');
-    
-    // 🔥 重置状态
     setCurrentOutfit(''); 
-    setCurrentScene(DEFAULT_SCENE); // 重置回教室
+    setCurrentScene(DEFAULT_SCENE);
 
     try {
       const result = await startChat(
@@ -252,9 +264,9 @@ const enterChat = async (charId: CharacterId, mode: ChatMode) => {
           mode, 
           userState.learningGoal, 
           userState.grammarTopic,
-          userState.language
+          userState.language,
+          customApiKey // 🔥 传入自定义 Key
       );
-      
       const greetingMsg: Message = { 
         id: 'init-' + Date.now(), 
         role: 'model', 
@@ -263,19 +275,16 @@ const enterChat = async (charId: CharacterId, mode: ChatMode) => {
         vocabulary: result.vocabulary,
         emotion: result.emotion,
         outfit: result.outfit,
-        location: result.location, // 记录 location
+        location: result.location,
         senderName: CHARACTERS[charId].name
       };
       
       setMessages([greetingMsg]);
       setCurrentEmotion(result.emotion || 'neutral');
       
-      // 🔥 处理开场白的特殊指令
       if (result.outfit) setCurrentOutfit(result.outfit);
       
-      // 🔥【关键】如果开场白就指定了场景 (比如设定是"海边约会")
       if (result.location && SCENE_MAP[result.location]) {
-          console.log("🌍 Init Scene:", result.location);
           setCurrentScene(result.location);
       }
       
@@ -291,13 +300,12 @@ const enterChat = async (charId: CharacterId, mode: ChatMode) => {
     }
   };
 
-const handleSendMessage = async (customPrompt?: string) => {
+  const handleSendMessage = async (customPrompt?: string) => {
     if (!selectedCharId || (isLoading && !customPrompt)) return;
     if (!customPrompt && !inputText.trim()) return;
 
     const isInternalTrigger = !!customPrompt;
     
-    // 1. 处理用户消息
     if (!isInternalTrigger) {
       const userMsg: Message = { 
           id: Date.now().toString(), 
@@ -321,9 +329,7 @@ const handleSendMessage = async (customPrompt?: string) => {
     setCurrentQuiz(null);
 
     try {
-      // 2. 发送给 AI
       const response = await sendMessage(currentInput, false);
-      
       const modelMsg: Message = { 
         id: (Date.now() + 1).toString(), 
         role: 'model', 
@@ -333,26 +339,20 @@ const handleSendMessage = async (customPrompt?: string) => {
         quiz: response.quiz,
         emotion: response.emotion,
         outfit: response.outfit,
-        location: response.location, // 记录 location
+        location: response.location,
         senderName: CHARACTERS[selectedCharId].name
       };
 
       setMessages(prev => [...prev, modelMsg]);
       setCurrentEmotion(response.emotion || 'neutral');
       
-      // 🔥 处理服装 (Outfit)
       if (response.outfit !== undefined) {
         setCurrentOutfit(response.outfit);
       }
 
-      // 🔥【关键】处理场景 (Location)
-      // AI 发回 location -> 检查我们的地图里有没有 -> 有就切换
       if (response.location) {
-          console.log("🌍 AI Requested Scene Change:", response.location);
           if (SCENE_MAP[response.location]) {
               setCurrentScene(response.location);
-          } else {
-              console.warn(`⚠️ Scene '${response.location}' not found in SCENE_MAP`);
           }
       }
       
@@ -412,7 +412,7 @@ const handleSendMessage = async (customPrompt?: string) => {
     setContextMenu(null);
     setIsTranslating(true);
     try {
-        const translation = await translateText(text, userState.language);
+        const translation = await translateText(text, userState.language, customApiKey); // 🔥 传入自定义 Key
         setTranslationResult({ original: text, translation });
     } finally {
         setIsTranslating(false);
@@ -425,7 +425,7 @@ const handleSendMessage = async (customPrompt?: string) => {
     setContextMenu(null);
     setIsTranslating(true);
     try {
-        const translation = await translateText(text, userState.language);
+        const translation = await translateText(text, userState.language, customApiKey); // 🔥 传入自定义 Key
         const newWord: CollectedWord = {
             id: Date.now().toString(),
             original: text,
@@ -463,29 +463,19 @@ const handleSendMessage = async (customPrompt?: string) => {
     });
   };
 
-  // 👔 升级后的头像计算函数
   const getDynamicAvatar = (char: Character): Character => {
-    // 1. 获取 AI 当前生成的表情 (如果没有就默认 neutral)
     const baseEmotion = currentEmotion || 'neutral';
-    
-    // 2. 尝试构建"服装_表情"的组合键 (例如: swim_shy)
-    // 如果 currentOutfit 是空的，这就只是 "shy"
     const outfitKey = currentOutfit ? `${currentOutfit}_${baseEmotion}` : baseEmotion;
 
-    // 3. 检查这个组合键是否存在于角色的 emotionMap 里
-    // (例如：Asuka 有没有 swim_shy 这个图？)
     if (char.emotionMap && char.emotionMap[outfitKey]) {
       return { ...char, avatarUrl: char.emotionMap[outfitKey] };
     }
 
-    // 4. 【保底逻辑】如果组合键不存在 (比如 AI 输出了 happy，但你没画 swim_happy)
-    // 我们尝试退回到该服装的默认表情 (swim_neutral)，保证衣服不突然变回去
     const fallbackOutfitKey = currentOutfit ? `${currentOutfit}_neutral` : 'neutral';
     if (currentOutfit && char.emotionMap && char.emotionMap[fallbackOutfitKey]) {
         return { ...char, avatarUrl: char.emotionMap[fallbackOutfitKey] };
     }
 
-    // 5. 【最终保底】如果连 swim_neutral 都没有，那就只好穿回校服了
     if (char.emotionMap && char.emotionMap[baseEmotion]) {
        return { ...char, avatarUrl: char.emotionMap[baseEmotion] };
     }
@@ -494,17 +484,17 @@ const handleSendMessage = async (customPrompt?: string) => {
   };
 
   const renderBackground = () => (
-     <div className="absolute inset-0 w-full h-full -z-0 bg-gray-900 select-none overflow-hidden">
+     <div className="absolute inset-0 w-full h-full z-0 bg-gray-900 select-none overflow-hidden">
          <div className="absolute inset-0 bg-gradient-to-br from-indigo-900 to-black z-0"></div>
          <img 
-    key={bgUrl}
-    src={customAssets.backgroundImage || bgUrl} 
-    alt="Background" 
-    loading="eager"
-    decoding="async"
-    className="absolute inset-0 w-full h-full object-cover opacity-60 z-10 scale-105 transition-all duration-1000 ease-in-out"
-    style={{ animation: 'breathe 20s ease-in-out infinite' }}
-/>
+            key={bgUrl}
+            src={customAssets.backgroundImage || bgUrl} 
+            alt="Background" 
+            loading="eager"
+            decoding="async"
+            className="absolute inset-0 w-full h-full object-cover opacity-60 z-10 scale-105 transition-all duration-1000 ease-in-out"
+            style={{ animation: 'breathe 20s ease-in-out infinite' }}
+        />
          <div className="absolute inset-0 bg-black/30 z-20 pointer-events-none" />
          <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/diagmonds-light.png')] opacity-10 pointer-events-none mix-blend-overlay"></div>
      </div>
@@ -545,7 +535,6 @@ const handleSendMessage = async (customPrompt?: string) => {
                             </button>
                         </div>
 
-                        {/* LOAD BUTTON - Opens Save/Load Screen in LOAD mode */}
                         <button 
                             onClick={() => setSaveLoadMode('LOAD')}
                             disabled={!hasAnySave}
@@ -569,7 +558,7 @@ const handleSendMessage = async (customPrompt?: string) => {
 
                 {setupStep === 'NEW_GAME' && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-md animate-in fade-in zoom-in-95 duration-300 p-4">
-                        <div className="relative w-full max-w-3xl bg-black border-4 border-white transform -skew-x-2 p-10 md:p-14 shadow-[20px_20px_0px_rgba(215,38,56,1)]">
+                        <div className="relative w-full max-w-3xl bg-black border-4 border-white transform -skew-x-2 p-10 md:p-14 shadow-[20px_20px_0px_rgba(215,38,56,1)] overflow-y-auto max-h-screen">
                             <button 
                                 onClick={() => setSetupStep('MENU')}
                                 className="absolute -top-8 -left-8 bg-yellow-400 text-black w-16 h-16 flex items-center justify-center font-black text-2xl border-4 border-black hover:bg-white hover:scale-110 transition-all z-50 transform skew-x-2 shadow-xl"
@@ -616,6 +605,23 @@ const handleSendMessage = async (customPrompt?: string) => {
                                         className="w-full bg-zinc-900 border-4 border-white/20 text-white text-xl px-6 py-5 font-bold focus:border-yellow-400 focus:bg-zinc-800 outline-none transition-all placeholder-white/10 shadow-inner"
                                         placeholder={T.enterGoal}
                                     />
+                                </div>
+
+                                {/* 🔥 Google API Key 输入框 (之前缺失的部分在这里) */}
+                                <div className="group relative border-t-2 border-white/10 pt-6 mt-4">
+                                    <label className="absolute -top-2 -left-2 bg-zinc-800 text-gray-400 px-4 py-1 font-bold text-xs uppercase transform -skew-x-12 border border-gray-600 z-20">
+                                      Google API Key (Optional)
+                                    </label>
+                                    <input 
+                                        type="password"
+                                        value={customApiKey}
+                                        onChange={handleApiKeyChange}
+                                        className="w-full bg-black/50 border-2 border-white/10 text-yellow-400 text-sm px-6 py-4 font-mono focus:border-yellow-400 outline-none transition-all placeholder-white/10 shadow-inner"
+                                        placeholder="AIzaSy..."
+                                    />
+                                    <p className="text-[10px] text-gray-500 mt-2 ml-1">
+                                      * Leave empty to use default server key. Key is stored locally in your browser.
+                                    </p>
                                 </div>
                             </div>
 
@@ -751,7 +757,6 @@ const handleSendMessage = async (customPrompt?: string) => {
             onContextMenu={handleContextMenu}
             onClick={() => { if(contextMenu) setContextMenu(null); }}
         >
-            {/* 🔍 调试信息面板 */}
             <div className="absolute top-1 left-1 z-[200] bg-black/70 text-white text-[10px] p-2 rounded font-mono">
               <div>outfit: {currentOutfit || '(empty)'}</div>
               <div>emotion: {currentEmotion}</div>
@@ -788,12 +793,10 @@ const handleSendMessage = async (customPrompt?: string) => {
             <div className="absolute inset-0 z-10 flex items-end justify-center pointer-events-none pb-0">
                  <div className="relative h-[85vh] max-h-[90vh] w-auto aspect-[45/70] flex items-end justify-center pointer-events-auto transition-all duration-500 shadow-2xl">
                     <CharacterSprite 
-    character={activeChar} 
-    isSpeaking={lastModelMsg?.role === 'model' && !isLoading && !isDialogueFinished} 
-    // 🔥 在这里加上 tachie-anim-breathe
-    // 💡 如果你希望说话时也跳动，可以根据 isSpeaking 动态加 tachie-anim-speak (可选)
-    className={`w-full h-full object-contain tachie-anim-breathe transition-all duration-300`} 
-/>
+                        character={activeChar} 
+                        isSpeaking={lastModelMsg?.role === 'model' && !isLoading && !isDialogueFinished} 
+                        className={`w-full h-full object-contain tachie-anim-breathe transition-all duration-300`} 
+                    />
                 </div>
             </div>
 
@@ -834,47 +837,16 @@ const handleSendMessage = async (customPrompt?: string) => {
                     </div>
                 )}
 
-                {/* --- 👔 换装控制条 (放在 DialogueBox 上面一点的位置) --- */}
                 {gameMode === GameMode.CHAT && (
                   <div className="absolute top-20 right-4 z-50 flex flex-col gap-2 bg-black/40 p-2 rounded-lg backdrop-blur-sm border border-white/10">
                     <span className="text-[10px] text-white/50 uppercase font-bold text-center">Costume</span>
                     
-                    {/* 校服 (默认) */}
-                    <button 
-                      onClick={() => setCurrentOutfit('')}
-                      className={`px-3 py-1 text-xs rounded border transition-all ${currentOutfit === '' ? 'bg-white text-black border-white' : 'text-white border-white/20 hover:bg-white/10'}`}
-                    >
-                      校服
-                    </button>
-
-                    {/* 私服 */}
-                    <button 
-                      onClick={() => setCurrentOutfit('casual')}
-                      className={`px-3 py-1 text-xs rounded border transition-all ${currentOutfit === 'casual' ? 'bg-pink-500 text-white border-pink-500' : 'text-white border-white/20 hover:bg-white/10'}`}
-                    >
-                      私服
-                    </button>
-
-                    {/* 泳装 */}
-                    <button 
-                      onClick={() => setCurrentOutfit('swim')}
-                      className={`px-3 py-1 text-xs rounded border transition-all ${currentOutfit === 'swim' ? 'bg-blue-500 text-white border-blue-500' : 'text-white border-white/20 hover:bg-white/10'}`}
-                    >
-                      泳装
-                    </button>
-                    
-                    {/* 运动服 */}
-                    <button 
-                      onClick={() => setCurrentOutfit('gym')}
-                      className={`px-3 py-1 text-xs rounded border transition-all ${currentOutfit === 'gym' ? 'bg-red-500 text-white border-red-500' : 'text-white border-white/20 hover:bg-white/10'}`}
-                    >
-                      运动
-                    </button>
-
-                    {/* 特殊 (Haku的王子装/Ren的战斗装等) */}
+                    <button onClick={() => setCurrentOutfit('')} className={`px-3 py-1 text-xs rounded border transition-all ${currentOutfit === '' ? 'bg-white text-black border-white' : 'text-white border-white/20 hover:bg-white/10'}`}>校服</button>
+                    <button onClick={() => setCurrentOutfit('casual')} className={`px-3 py-1 text-xs rounded border transition-all ${currentOutfit === 'casual' ? 'bg-pink-500 text-white border-pink-500' : 'text-white border-white/20 hover:bg-white/10'}`}>私服</button>
+                    <button onClick={() => setCurrentOutfit('swim')} className={`px-3 py-1 text-xs rounded border transition-all ${currentOutfit === 'swim' ? 'bg-blue-500 text-white border-blue-500' : 'text-white border-white/20 hover:bg-white/10'}`}>泳装</button>
+                    <button onClick={() => setCurrentOutfit('gym')} className={`px-3 py-1 text-xs rounded border transition-all ${currentOutfit === 'gym' ? 'bg-red-500 text-white border-red-500' : 'text-white border-white/20 hover:bg-white/10'}`}>运动</button>
                     <button 
                       onClick={() => setCurrentOutfit(
-                        // 根据当前角色ID判断特殊服装的前缀 (简单判断一下)
                         selectedCharId === 'haku' ? 'prince' : 
                         selectedCharId === 'ren' ? 'fantasy' : 
                         selectedCharId === 'asuka' ? 'maid' : 
@@ -1019,7 +991,6 @@ const handleSendMessage = async (customPrompt?: string) => {
                                 }
                             `}
                         >
-                            {/* Slot Number Background */}
                             <div className="absolute -right-4 -bottom-8 text-9xl font-black text-white/5 italic select-none pointer-events-none">
                                 {slot.index + 1}
                             </div>
@@ -1062,8 +1033,6 @@ const handleSendMessage = async (customPrompt?: string) => {
                                     </div>
                                 )}
                             </div>
-
-                            {/* Hover Overlay */}
                             <div className={`absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none`} />
                         </div>
                     ))}
@@ -1129,44 +1098,15 @@ const handleSendMessage = async (customPrompt?: string) => {
                                 <p className="text-yellow-400 font-medium">{word.translation}</p>
                             </div>
                             <div className="flex items-center gap-4">
-                                {/* --- Feature 1: Reordering Buttons --- */}
                                 <div className="flex flex-col gap-1 mr-4 opacity-30 group-hover:opacity-100 transition-opacity">
-                                    <button 
-                                        onClick={() => handleWordAction(index, 'top')} 
-                                        className="text-white/50 hover:text-yellow-400 text-xs" 
-                                        title="Pin to top"
-                                        disabled={index === 0}
-                                    >
-                                        🔝
-                                    </button>
+                                    <button onClick={() => handleWordAction(index, 'top')} className="text-white/50 hover:text-yellow-400 text-xs" title="Pin to top" disabled={index === 0}>🔝</button>
                                     <div className="flex gap-1">
-                                        <button 
-                                            onClick={() => handleWordAction(index, 'up')} 
-                                            className="text-white/50 hover:text-white text-xs" 
-                                            title="Move Up"
-                                            disabled={index === 0}
-                                        >
-                                            ⬆
-                                        </button>
-                                        <button 
-                                            onClick={() => handleWordAction(index, 'down')} 
-                                            className="text-white/50 hover:text-white text-xs" 
-                                            title="Move Down"
-                                            disabled={index === userState.collectedWords.length - 1}
-                                        >
-                                            ⬇
-                                        </button>
+                                        <button onClick={() => handleWordAction(index, 'up')} className="text-white/50 hover:text-white text-xs" title="Move Up" disabled={index === 0}>⬆</button>
+                                        <button onClick={() => handleWordAction(index, 'down')} className="text-white/50 hover:text-white text-xs" title="Move Down" disabled={index === userState.collectedWords.length - 1}>⬇</button>
                                     </div>
                                 </div>
-
-                                <span className="text-[10px] text-white/20 font-mono">
-                                    {new Date(word.timestamp).toLocaleDateString()}
-                                </span>
-                                <button 
-                                    onClick={() => removeCollectedWord(word.id)}
-                                    className="text-white/20 hover:text-red-500 transition-colors p-2"
-                                    title="Remove from wordbook"
-                                >
+                                <span className="text-[10px] text-white/20 font-mono">{new Date(word.timestamp).toLocaleDateString()}</span>
+                                <button onClick={() => removeCollectedWord(word.id)} className="text-white/20 hover:text-red-500 transition-colors p-2" title="Remove from wordbook">
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                     </svg>
@@ -1189,7 +1129,6 @@ const handleSendMessage = async (customPrompt?: string) => {
             </div>
             
             <div className="flex flex-1 overflow-hidden">
-                {/* Sidebar */}
                 <div className="w-16 md:w-64 bg-black/20 border-r border-white/5 flex flex-col overflow-y-auto">
                     {(Object.keys(CHARACTERS) as CharacterId[]).map(id => (
                         <button 
@@ -1198,7 +1137,6 @@ const handleSendMessage = async (customPrompt?: string) => {
                             className={`p-4 flex items-center gap-3 transition-all border-l-4 ${activeHistoryTab === id ? `bg-white/5 ${CHARACTERS[id].color.replace('bg-', 'border-')}` : 'border-transparent opacity-50 hover:opacity-100'}`}
                         >
                             <div className={`w-8 h-8 rounded-full overflow-hidden border border-white/20 shrink-0`}>
-                                {/* Using neutral face as icon */}
                                 {CHARACTERS[id].avatarUrl ? (
                                      <img src={CHARACTERS[id].avatarUrl} className="w-full h-full object-cover" alt="" />
                                 ) : (
@@ -1212,7 +1150,6 @@ const handleSendMessage = async (customPrompt?: string) => {
                     ))}
                 </div>
 
-                {/* Messages */}
                 <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-900/50">
                     {chatHistories[activeHistoryTab].length === 0 ? (
                         <div className="h-full flex items-center justify-center text-white/20 italic font-medium">No history found.</div>
@@ -1249,36 +1186,31 @@ const handleSendMessage = async (customPrompt?: string) => {
 };
 
 export default App;
-// 🌟 放在 src/App.tsx 文件最后 (export default App 后面)
 
-// 注入全局 CSS 动画样式
 const styleSheet = document.createElement("style");
 styleSheet.innerText = `
-  /* 🌬️ 呼吸动画 (Breathing) */
   @keyframes tachie-breathe {
     0% { transform: scale(1) translateY(0); }
-    50% { transform: scale(1.02) translateY(-3px); } /* 吸气：轻微放大 + 上浮 */
+    50% { transform: scale(1.02) translateY(-3px); }
     100% { transform: scale(1) translateY(0); }
   }
 
-  /* 🗣️ 说话跳动动画 (Speaking Bounce) */
   @keyframes tachie-speak {
     0% { transform: translateY(0); }
-    15% { transform: translateY(-4px); } /* 快速上跳 */
+    15% { transform: translateY(-4px); }
     30% { transform: translateY(0); }
-    45% { transform: translateY(-2px); } /* 二次小跳 */
+    45% { transform: translateY(-2px); }
     100% { transform: translateY(0); }
   }
 
-  /* 应用到图片的类 */
   .tachie-anim-breathe {
-    animation: tachie-breathe 5s ease-in-out infinite; /* 5秒一次深呼吸 */
-    transform-origin: bottom center; /* 保证脚底不动 */
-    will-change: transform; /* 性能优化 */
+    animation: tachie-breathe 5s ease-in-out infinite;
+    transform-origin: bottom center;
+    will-change: transform;
   }
 
   .tachie-anim-speak {
-    animation: tachie-speak 0.4s ease-out; /* 说话时的瞬间跳动 */
+    animation: tachie-speak 0.4s ease-out;
     transform-origin: bottom center;
   }
 `;
